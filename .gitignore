@@ -18,3 +18,6 @@ scripts/archive/
 data_processed/*_202[0-9][0-9][0-9][0-9][0-9].csv
 outputs_tables/*_202[0-9][0-9][0-9][0-9][0-9].csv
 outputs_maps/*_202[0-9][0-9][0-9][0-9][0-9].html
+
+# Leaflet map dependency folders
+outputs_maps/*_files/

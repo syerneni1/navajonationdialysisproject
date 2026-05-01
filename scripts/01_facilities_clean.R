@@ -194,21 +194,34 @@ fac_verified <- fac_verified %>%
   )
 
 # Apply manual coordinate corrections
-normalize_name <- function(x) {
+# Match by address + city (more flexible than exact name matching)
+normalize_address <- function(x) {
   str_to_upper(x) %>%
     str_replace_all("[^A-Z0-9]", "") %>%
     str_trim()
 }
 
+# Prepare manual corrections with normalized address + city
+manual_corrections_normalized <- manual_corrections %>%
+  filter(!is.na(latitude)) %>%
+  mutate(
+    addr_normalized = normalize_address(manual_address),
+    # Extract city from manual_address if present
+    city_from_addr = str_extract(manual_address, "(?i)[A-Z]+(?=\\s+(AZ|NM|UT|CO))"),
+    city_normalized = normalize_address(coalesce(city_from_addr, ""))
+  )
+
+# Match facilities to manual corrections by address + city similarity
 fac_verified <- fac_verified %>%
-  mutate(name_normalized = normalize_name(facility_name_cms)) %>%
+  mutate(
+    addr_normalized = normalize_address(paste(address_line_1_cms, city_cms))
+  ) %>%
   left_join(
-    manual_corrections %>%
-      filter(!is.na(facility_id)) %>%
-      mutate(name_normalized = normalize_name(facility_id)) %>%
-      select(name_normalized, manual_lat = latitude, manual_lng = longitude,
-             manual_addr = formatted_address_google),
-    by = "name_normalized"
+    manual_corrections_normalized %>%
+      select(addr_normalized, city_normalized,
+             manual_lat = latitude, manual_lng = longitude,
+             manual_addr = manual_address),
+    by = "addr_normalized"
   ) %>%
   mutate(
     lat_places = coalesce(manual_lat, lat_places),
@@ -216,7 +229,7 @@ fac_verified <- fac_verified %>%
     formatted_address_google = coalesce(manual_addr, formatted_address_google),
     match_status = if_else(!is.na(manual_lat), "manual", match_status)
   ) %>%
-  select(-name_normalized, -manual_lat, -manual_lng, -manual_addr)
+  select(-addr_normalized, -city_normalized, -manual_lat, -manual_lng, -manual_addr)
 
 # Handle USRC SOLID ROCK DIALYSIS (no facility_id, match by name)
 usrc_idx <- which(str_detect(fac_verified$facility_name_cms, "USRC SOLID ROCK"))
