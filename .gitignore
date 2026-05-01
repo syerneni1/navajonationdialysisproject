@@ -1,0 +1,20 @@
+# R environment
+.Renviron
+.Rhistory
+.RData
+.Rproj.user
+
+# Mac
+.DS_Store
+
+# Temporary/intermediate files
+manual_review_comparison.csv
+Interim/
+
+# Archive folder (development scripts)
+scripts/archive/
+
+# Old dated output files (keep only current versions)
+data_processed/*_202[0-9][0-9][0-9][0-9][0-9].csv
+outputs_tables/*_202[0-9][0-9][0-9][0-9][0-9].csv
+outputs_maps/*_202[0-9][0-9][0-9][0-9][0-9].html
