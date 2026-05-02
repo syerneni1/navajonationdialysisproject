@@ -165,16 +165,23 @@ api_df <- bind_rows(lapply(results, as_tibble))
 fac_verified <- bind_cols(fac_filtered, api_df)
 
 # ── 3. Apply manual corrections ──────────────────────────────────────────────
-# Manual corrections for facilities flagged as "manual"
-# Coordinates confirmed via Google Maps satellite imagery
+# Manual corrections for facilities with verified reference coordinates
+# Coordinates confirmed via Google Maps and reference data validation
 
 manual_corrections <- tribble(
   ~facility_id, ~latitude, ~longitude, ~formatted_address_google,
+  # Original manual corrections
   "462504", 40.25753458576979, -111.66220919256065, "1675 Freedom Blvd 200 W Ste 15, Provo, UT 84604",
-  "463502", 40.7474765224441, -111.89229025040555, "1000 S Main St #105, Salt Lake City, UT 84101",
-  "322524", 35.069195491137265, -107.57010943548619, "80A Veterans Blvd, Acoma, New Mexico 87049",
   "322545", 36.914633409026194, -106.96740474016809, "450 N Mundo Dr, Dulce, NM 87528",
-  NA_character_, 35.658670176588586, -109.04031321553796, "1580 NM-264 ste a, Gallup, NM 87301"
+  NA_character_, 35.658670176588586, -109.04031321553796, "1580 NM-264 ste a, Gallup, NM 87301",
+  # Corrected coordinates from reference data validation (2026-05-01)
+  "463502", 40.74747652, -111.8922903, "5848 S Fashion Blvd #50, Murray, UT 84107, United States",
+  "32592", 35.8022226, -110.4260281, "HWY 264 MILE MARKER 388, Polacca, AZ 86042, United States",
+  "322524", 35.06919549, -107.5701094, "501 Sunrise Ct, Acoma Pueblo, NM 87034, United States",
+  "322531", 35.0979968, -106.6286975, "1500 Indian School Rd NE, Albuquerque, NM 87102, United States",
+  "32518", 36.1568845, -109.584472, "US Hwy 191, Chinle, AZ 86503, United States",
+  "32559", 36.7104912, -110.2479834, "Highway 163 Box 217, Kayenta, AZ 86033, United States",
+  "32633", 33.0194561, -111.3916021, "300 W HIGHWAY 287 #300300, Florence, AZ 85132, United States"
 ) %>%
   mutate(match_status = "manual")
 
@@ -194,34 +201,16 @@ fac_verified <- fac_verified %>%
   )
 
 # Apply manual coordinate corrections
-# Match by address + city (more flexible than exact name matching)
-normalize_address <- function(x) {
-  str_to_upper(x) %>%
-    str_replace_all("[^A-Z0-9]", "") %>%
-    str_trim()
-}
-
-# Prepare manual corrections with normalized address + city
-manual_corrections_normalized <- manual_corrections %>%
-  filter(!is.na(latitude)) %>%
-  mutate(
-    addr_normalized = normalize_address(manual_address),
-    # Extract city from manual_address if present
-    city_from_addr = str_extract(manual_address, "(?i)[A-Z]+(?=\\s+(AZ|NM|UT|CO))"),
-    city_normalized = normalize_address(coalesce(city_from_addr, ""))
-  )
-
-# Match facilities to manual corrections by address + city similarity
+# Match by facility_id for facilities with confirmed coordinates
 fac_verified <- fac_verified %>%
-  mutate(
-    addr_normalized = normalize_address(paste(address_line_1_cms, city_cms))
-  ) %>%
   left_join(
-    manual_corrections_normalized %>%
-      select(addr_normalized, city_normalized,
-             manual_lat = latitude, manual_lng = longitude,
-             manual_addr = manual_address),
-    by = "addr_normalized"
+    manual_corrections %>%
+      filter(!is.na(facility_id)) %>%
+      select(facility_id,
+             manual_lat = latitude,
+             manual_lng = longitude,
+             manual_addr = formatted_address_google),
+    by = "facility_id"
   ) %>%
   mutate(
     lat_places = coalesce(manual_lat, lat_places),
@@ -229,7 +218,7 @@ fac_verified <- fac_verified %>%
     formatted_address_google = coalesce(manual_addr, formatted_address_google),
     match_status = if_else(!is.na(manual_lat), "manual", match_status)
   ) %>%
-  select(-addr_normalized, -city_normalized, -manual_lat, -manual_lng, -manual_addr)
+  select(-manual_lat, -manual_lng, -manual_addr)
 
 # Handle USRC SOLID ROCK DIALYSIS (no facility_id, match by name)
 usrc_idx <- which(str_detect(fac_verified$facility_name_cms, "USRC SOLID ROCK"))
