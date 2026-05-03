@@ -23,7 +23,12 @@ outputs_maps/*_202[0-9][0-9][0-9][0-9][0-9].html
 outputs_maps/*_files/
 
 # Large files (>100MB, too big for GitHub)
-# Note: blocks_filtered.geojson is committed as .gz (26MB compressed from 117MB)
+# Note: Compressed versions (.gz) are committed instead
 data_processed/blocks_filtered.geojson
 !data_processed/blocks_filtered.geojson.gz
+data_processed/block_demand.geojson
+!data_processed/block_demand.geojson.gz
+data_processed/block_demographics.csv
+!data_processed/block_demographics.csv.gz
 outputs_maps/04_blocks_verification.html
+outputs_maps/06_block_demand_verification.html

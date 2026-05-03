@@ -1,0 +1,13 @@
+category,group,multiplier
+Sex,Female,1
+Sex,Male,1.637
+Age,0-17,0.099
+Age,18-44,1
+Age,45-64,5.058
+Age,65-74,10.077
+Age,75+,12.922
+Race,"White Alone, Not Hispanic or Latino",1
+Race,"Black or African American Alone, Not Hispanic or Latino",3.795
+Race,Hispanic or Latino,2.115
+Race,Asian/NH/PI,1.574
+Race,"American Indian and Alaska Native Alone, Not Hispanic or Latino",2.319
