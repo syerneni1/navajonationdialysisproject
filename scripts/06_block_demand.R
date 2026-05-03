@@ -120,11 +120,10 @@ cat("  95th percentile P_k:", round(p95, 2), "(used for color scale cap)\n")
 blocks_with_demand <- blocks_with_demand %>%
   mutate(P_k_display = pmin(P_k, p95))
 
-# Simplify geometries for faster map rendering
-blocks_map <- blocks_with_demand %>%
-  st_simplify(dTolerance = 50, preserveTopology = TRUE)
+# Use actual block geometries (no simplification)
+blocks_map <- blocks_with_demand
 
-cat("  Simplified geometries for display\n")
+cat("  Using full-resolution block boundaries\n")
 
 # Create color palette (smooth gradient)
 demand_palette <- colorNumeric(
@@ -133,27 +132,29 @@ demand_palette <- colorNumeric(
   na.color = "#808080"
 )
 
-# Load Navajo Nation boundary for context
+# Load context layers
 navajo <- st_read("data_processed/navajo_nation.geojson", quiet = TRUE) %>%
   st_transform(st_crs(blocks_map))
+
+chapters <- st_read("data_processed/navajo_chapters.geojson", quiet = TRUE) %>%
+  st_transform(st_crs(blocks_map))
+
+isochrones <- st_read("data_processed/isochrones_Fd.geojson", quiet = TRUE) %>%
+  st_transform(st_crs(blocks_map))
+
+# Combine all isochrones into single coverage area
+isochrone_combined <- isochrones %>%
+  st_union() %>%
+  st_sf()
+
+cat("  Loaded context layers (chapters, isochrones)\n")
 
 # Create map
 map <- leaflet() %>%
   addTiles() %>%
   setView(lng = -109.5, lat = 36.0, zoom = 7)
 
-# Add Navajo Nation boundary
-map <- map %>%
-  addPolygons(
-    data = navajo,
-    fillColor = "transparent",
-    color = "blue",
-    weight = 2,
-    opacity = 0.6,
-    label = "Navajo Nation"
-  )
-
-# Add blocks colored by demand
+# Add blocks colored by demand (FIRST - so outlines appear on top)
 map <- map %>%
   addPolygons(
     data = blocks_map,
@@ -172,6 +173,30 @@ map <- map %>%
     label = ~paste0("P_k: ", round(P_k, 2))
   )
 
+# Add chapter boundaries (blue solid outline, on top)
+map <- map %>%
+  addPolygons(
+    data = chapters,
+    fillColor = "transparent",
+    color = "blue",
+    weight = 1,
+    opacity = 0.7,
+    group = "Navajo Chapters",
+    label = ~paste0("Chapter: ", NAME)
+  )
+
+# Add combined F_d isochrone coverage (blue solid outline, on top)
+map <- map %>%
+  addPolygons(
+    data = isochrone_combined,
+    fillColor = "transparent",
+    color = "blue",
+    weight = 2,
+    opacity = 0.8,
+    group = "F_d Isochrone Coverage",
+    label = "F_d Isochrone Coverage"
+  )
+
 # Add legend
 map <- map %>%
   addLegend(
@@ -183,6 +208,13 @@ map <- map %>%
                    nrow(blocks_map), " blocks"),
     opacity = 0.7,
     labFormat = labelFormat(digits = 1)
+  )
+
+# Add layer controls for toggling chapters and isochrones
+map <- map %>%
+  addLayersControl(
+    overlayGroups = c("Navajo Chapters", "F_d Isochrone Coverage"),
+    options = layersControlOptions(collapsed = FALSE)
   )
 
 # Save map
@@ -224,5 +256,5 @@ cat("Output files:\n")
 cat(" ", OUTPUT_FILE, "\n")
 cat("  └─ Block geometries with P_k (full resolution)\n\n")
 cat(" ", MAP_FILE, "\n")
-cat("  └─ Verification map (simplified for display)\n")
+cat("  └─ Verification map (full-resolution boundaries)\n")
 cat("───────────────────────────────────────────────────────────────────────\n")
