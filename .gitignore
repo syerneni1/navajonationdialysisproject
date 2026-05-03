@@ -30,5 +30,8 @@ data_processed/block_demand.geojson
 !data_processed/block_demand.geojson.gz
 data_processed/block_demographics.csv
 !data_processed/block_demographics.csv.gz
+data_processed/block_access_scores.geojson
+!data_processed/block_access_scores.geojson.gz
 outputs_maps/04_blocks_verification.html
 outputs_maps/06_block_demand_verification.html
+outputs_maps/08_access_score_verification.html
