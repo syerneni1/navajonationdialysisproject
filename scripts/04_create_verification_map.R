@@ -204,14 +204,17 @@ map <- map %>%
     label = ~facility_name_cms
   )
 
-# Add legend for chapters
+# Add layer controls for toggling isochrones and chapter borders
 map <- map %>%
-  addLegend(
-    position = "topright",
-    pal = chapter_colors,
-    values = chapters$NAME,
-    title = "Navajo Chapters",
-    opacity = 0.7
+  addLayersControl(
+    overlayGroups = c("Chapters",
+                      "Isochrones (0-15 min)",
+                      "Isochrones (15-30 min)",
+                      "Isochrones (30-60 min)",
+                      "Census Blocks (Navajo)",
+                      "Census Blocks (Isochrones only)",
+                      "F_d Facilities"),
+    options = layersControlOptions(collapsed = FALSE)
   )
 
 # Save map
