@@ -16,6 +16,7 @@ library(ggplot2)
 library(ggspatial)
 library(patchwork)
 library(tigris)
+library(writexl)
 
 sf_use_s2(FALSE)
 options(tigris_use_cache = TRUE)
@@ -373,40 +374,44 @@ agency_results <- agency_results %>%
   mutate(P_per_capita = P_total / population)
 
 # Calculate unified scales for each metric across all three levels
-# Demand per capita scale
-demand_range <- c(
-  min(c(blocks_with_pop$P_k_per_capita, chapter_results$P_per_capita, agency_results$P_per_capita), na.rm = TRUE),
-  max(c(blocks_with_pop$P_k_per_capita, chapter_results$P_per_capita, agency_results$P_per_capita), na.rm = TRUE)
+# Demand per capita scale (chapter and agency only for final panel)
+demand_range_chapter_agency <- c(
+  floor(min(c(chapter_results$P_per_capita, agency_results$P_per_capita), na.rm = TRUE)),
+  ceiling(max(c(chapter_results$P_per_capita, agency_results$P_per_capita), na.rm = TRUE))
 )
 
-# SPAI scale (block and chapter only)
+# SPAI scale (all three levels: block, chapter, agency)
+spai_max <- max(c(blocks_with_pop$A_k, chapter_results$SPAI_weighted, agency_results$SPAI_weighted), na.rm = TRUE)
 spai_range <- c(
-  min(c(blocks_with_pop$A_k, chapter_results$SPAI_weighted), na.rm = TRUE),
-  max(c(blocks_with_pop$A_k, chapter_results$SPAI_weighted), na.rm = TRUE)
+  0,
+  ceiling(spai_max * 10000) / 10000
 )
 
-# SPAR scale
+# SPAR scale (all three levels)
+spar_max <- max(c(blocks_with_pop$SPAR_k, chapter_results$SPAR_weighted, agency_results$SPAR_weighted), na.rm = TRUE)
 spar_range <- c(
-  min(c(blocks_with_pop$SPAR_k, chapter_results$SPAR_weighted, agency_results$SPAR_weighted), na.rm = TRUE),
-  max(c(blocks_with_pop$SPAR_k, chapter_results$SPAR_weighted, agency_results$SPAR_weighted), na.rm = TRUE)
+  0,
+  ceiling(spar_max * 10) / 10
 )
 
 cat("  Unified scale ranges:\n")
-cat("    Demand per capita:", round(demand_range[1], 4), "to", round(demand_range[2], 4), "\n")
-cat("    SPAI:", formatC(spai_range[1], format="e", digits=2), "to", formatC(spai_range[2], format="e", digits=2), "\n")
-cat("    SPAR:", round(spar_range[1], 3), "to", round(spar_range[2], 3), "\n\n")
+cat("    Demand per capita (chapter+agency):", demand_range_chapter_agency[1], "to", demand_range_chapter_agency[2], "\n")
+cat("    SPAI (block+chapter+agency):", spai_range[1], "to", spai_range[2], "\n")
+cat("    SPAR (block+chapter+agency):", spar_range[1], "to", spar_range[2], "\n\n")
 
-# Unified color scales with MORE bins and discrete boxes
+# Unified color scales with discrete bins
+# Demand: More dramatic colors for chapter+agency levels
 demand_colors_unified <- scale_fill_stepsn(
-  colors = c("#ffffcc", "#ffeda0", "#fed976", "#feb24c", "#fd8d3c", "#fc4e2a", "#e31a1c", "#bd0026", "#800026"),
-  n.breaks = 10,
-  limits = demand_range,
+  colors = c("#ffffb2", "#fecc5c", "#fd8d3c", "#f03b20", "#bd0026"),
+  n.breaks = 8,
+  limits = demand_range_chapter_agency,
   na.value = "grey90",
   name = "Demand\nper capita",
   guide = guide_colorsteps(barheight = unit(5, "cm"), barwidth = unit(0.6, "cm"),
                           show.limits = TRUE, ticks = TRUE)
 )
 
+# SPAI: Now includes all three levels (block, chapter, agency)
 spai_colors_unified <- scale_fill_stepsn(
   colors = c("#f7fbff", "#deebf7", "#c6dbef", "#9ecae1", "#6baed6", "#4292c6", "#2171b5", "#08519c", "#08306b"),
   n.breaks = 10,
@@ -417,6 +422,7 @@ spai_colors_unified <- scale_fill_stepsn(
                           show.limits = TRUE, ticks = TRUE)
 )
 
+# SPAR: All three levels
 spar_colors_unified <- scale_fill_stepsn(
   colors = c("#a50026", "#d73027", "#f46d43", "#fdae61", "#fee08b", "#ffffbf",
              "#d9ef8b", "#a6d96a", "#66bd63", "#1a9850", "#006837"),
@@ -562,10 +568,26 @@ p_spar_agency <- ggplot() +
                         pad_x = unit(0.3, "cm"), pad_y = unit(0.3, "cm")) +
   theme_map()
 
+# Agency-level SPAI
+p_spai_agency <- ggplot() +
+  geom_sf(data = agency_results, aes(fill = SPAI_weighted), color = border_style$color, size = border_style$size) +
+  spai_colors_unified +
+  coord_sf(xlim = c(bbox_navajo["xmin"], bbox_navajo["xmax"]),
+           ylim = c(bbox_navajo["ymin"], bbox_navajo["ymax"]), expand = FALSE) +
+  annotation_scale(location = "bl", width_hint = 0.18, text_family = "Arial", text_cex = 0.7,
+                  unit_category = "imperial", pad_x = unit(0.3, "cm"), pad_y = unit(0.3, "cm")) +
+  annotation_scale(location = "bl", width_hint = 0.18, text_family = "Arial", text_cex = 0.7,
+                  unit_category = "metric", pad_x = unit(0.3, "cm"), pad_y = unit(1.0, "cm")) +
+  annotation_north_arrow(location = "tr", which_north = "true",
+                        style = north_arrow_orienteering(text_family = "Arial", text_size = 10),
+                        height = unit(1.0, "cm"), width = unit(1.0, "cm"),
+                        pad_x = unit(0.3, "cm"), pad_y = unit(0.3, "cm")) +
+  theme_map()
+
 cat("  Creating combined panels...\n")
 
-# 1x3 Demand panel (block, chapter, agency)
-p_demand_combined <- (p_demand_block | p_demand_chapter | p_demand_agency) +
+# 1x2 Demand panel (chapter, agency only - not block)
+p_demand_combined <- (p_demand_chapter | p_demand_agency) +
   plot_layout(guides = "collect") +
   plot_annotation(
     title = "Dialysis Demand per Capita",
@@ -578,10 +600,10 @@ p_demand_combined <- (p_demand_block | p_demand_chapter | p_demand_agency) +
     )
   )
 
-ggsave("outputs_maps/09_demand_combined.png", p_demand_combined, width = 24, height = 9, dpi = 300, bg = "white")
+ggsave("outputs_maps/09_demand_combined.png", p_demand_combined, width = 18, height = 9, dpi = 300, bg = "white")
 
-# 1x2 SPAI panel (block, chapter only - no agency)
-p_spai_combined <- (p_spai_block | p_spai_chapter) +
+# 1x3 SPAI panel (block, chapter, agency)
+p_spai_combined <- (p_spai_block | p_spai_chapter | p_spai_agency) +
   plot_layout(guides = "collect") +
   plot_annotation(
     title = "Spatial Access Index (SPAI)",
@@ -594,7 +616,7 @@ p_spai_combined <- (p_spai_block | p_spai_chapter) +
     )
   )
 
-ggsave("outputs_maps/09_spai_combined.png", p_spai_combined, width = 18, height = 9, dpi = 300, bg = "white")
+ggsave("outputs_maps/09_spai_combined.png", p_spai_combined, width = 24, height = 9, dpi = 300, bg = "white")
 
 # 1x3 SPAR panel (block, chapter, agency)
 p_spar_combined <- (p_spar_block | p_spar_chapter | p_spar_agency) +
@@ -632,10 +654,10 @@ isochrone_colors_palette <- c("0-15 min" = "#1a9850", "15-30 min" = "#fdae61", "
 
 p_isochrones <- ggplot() +
   geom_sf(data = states, fill = NA, color = "grey60", size = 0.5) +
+  geom_sf(data = chapters, fill = "grey95", color = border_style$color, size = border_style$size) +
   geom_sf(data = isochrones, aes(fill = band), alpha = 0.6, color = NA) +
   scale_fill_manual(values = isochrone_colors_palette, name = "Travel Time",
                    guide = guide_legend(keyheight = unit(0.8, "cm"), keywidth = unit(0.5, "cm"))) +
-  geom_sf(data = chapters, fill = NA, color = border_style$color, size = border_style$size) +
   coord_sf(xlim = c(bbox_navajo["xmin"], bbox_navajo["xmax"]),
            ylim = c(bbox_navajo["ymin"], bbox_navajo["ymax"]), expand = FALSE) +
   annotation_scale(location = "bl", width_hint = 0.18, text_family = "Arial", text_cex = 0.8,
@@ -648,10 +670,10 @@ p_isochrones <- ggplot() +
                         pad_x = unit(0.3, "cm"), pad_y = unit(0.3, "cm")) +
   labs(title = expression(F[d]~"Facility Isochrones")) +
   theme_map() +
-  annotate("text", x = -111.5, y = 35.0, label = "AZ", size = 6, fontface = "bold") +
-  annotate("text", x = -107.0, y = 34.8, label = "NM", size = 6, fontface = "bold") +
-  annotate("text", x = -110.5, y = 37.8, label = "UT", size = 6, fontface = "bold") +
-  annotate("text", x = -107.5, y = 37.8, label = "CO", size = 6, fontface = "bold")
+  annotate("text", x = -112.3, y = 34.2, label = "AZ", size = 6, fontface = "bold") +
+  annotate("text", x = -105.8, y = 34.5, label = "NM", size = 6, fontface = "bold") +
+  annotate("text", x = -112.0, y = 38.0, label = "UT", size = 6, fontface = "bold") +
+  annotate("text", x = -105.8, y = 38.0, label = "CO", size = 6, fontface = "bold")
 
 ggsave("outputs_maps/09_isochrones.png", p_isochrones, width = 10, height = 8, dpi = 300, bg = "white")
 
@@ -681,16 +703,52 @@ p_facilities <- ggplot() +
                         pad_x = unit(0.3, "cm"), pad_y = unit(0.3, "cm")) +
   labs(title = "Dialysis Facilities") +
   theme_map() +
-  annotate("text", x = -111.5, y = 35.0, label = "AZ", size = 6, fontface = "bold") +
-  annotate("text", x = -107.0, y = 34.8, label = "NM", size = 6, fontface = "bold") +
-  annotate("text", x = -110.5, y = 37.8, label = "UT", size = 6, fontface = "bold") +
-  annotate("text", x = -107.5, y = 37.8, label = "CO", size = 6, fontface = "bold")
+  annotate("text", x = -112.3, y = 34.2, label = "AZ", size = 6, fontface = "bold") +
+  annotate("text", x = -105.8, y = 34.5, label = "NM", size = 6, fontface = "bold") +
+  annotate("text", x = -112.0, y = 38.0, label = "UT", size = 6, fontface = "bold") +
+  annotate("text", x = -105.8, y = 38.0, label = "CO", size = 6, fontface = "bold")
 
 ggsave("outputs_maps/09_facilities_bubble.png", p_facilities, width = 10, height = 8, dpi = 300, bg = "white")
 
 cat("\n✓ All R plots saved to outputs_maps/\n\n")
 
-# ── 9. Summary ────────────────────────────────────────────────────────────────
+# ── 9. Excel Export ───────────────────────────────────────────────────────────
+cat("Creating Excel tables...\n")
+
+# Prepare chapter table
+chapter_excel <- chapter_results %>%
+  st_drop_geometry() %>%
+  select(Chapter = NAME,
+         `Absolute Demand` = P_total,
+         `Demand per Capita` = P_per_capita,
+         SPAR = SPAR_weighted,
+         SPAI = SPAI_weighted,
+         Population = population) %>%
+  arrange(desc(SPAR))
+
+# Prepare agency table
+agency_excel <- agency_results %>%
+  st_drop_geometry() %>%
+  select(Agency = AGENCY,
+         `Absolute Demand` = P_total,
+         `Demand per Capita` = P_per_capita,
+         SPAR = SPAR_weighted,
+         SPAI = SPAI_weighted,
+         Population = population) %>%
+  arrange(desc(SPAR))
+
+# Export to Excel with separate sheets
+write_xlsx(
+  list(
+    "Chapter Summary" = chapter_excel,
+    "Agency Summary" = agency_excel
+  ),
+  "outputs_tables/09_chapter_agency_summary.xlsx"
+)
+
+cat("✓ Excel file saved to: outputs_tables/09_chapter_agency_summary.xlsx\n\n")
+
+# ── 10. Summary ───────────────────────────────────────────────────────────────
 cat("── FINAL SUMMARY ──────────────────────────────────────────────────────\n")
 cat("Aggregation and visualization complete\n\n")
 
@@ -712,11 +770,13 @@ cat("  CSV Tables:\n")
 cat("   ", OUTPUT_CHAPTER_CSV, "\n")
 cat("   ", OUTPUT_AGENCY_CSV, "\n")
 cat("   ", OUTPUT_ACCESS_TIERS, "\n")
+cat("  Excel Summary:\n")
+cat("    outputs_tables/09_chapter_agency_summary.xlsx\n")
 cat("  HTML Map:\n")
 cat("   ", MAP_FILE, "\n")
 cat("  R Plots (PNG):\n")
-cat("    outputs_maps/09_demand_combined.png (1x3 panel: block, chapter, agency)\n")
-cat("    outputs_maps/09_spai_combined.png (1x2 panel: block, chapter)\n")
+cat("    outputs_maps/09_demand_combined.png (1x2 panel: chapter, agency)\n")
+cat("    outputs_maps/09_spai_combined.png (1x3 panel: block, chapter, agency)\n")
 cat("    outputs_maps/09_spar_combined.png (1x3 panel: block, chapter, agency)\n")
 cat("    outputs_maps/09_isochrones.png\n")
 cat("    outputs_maps/09_facilities_bubble.png\n")
