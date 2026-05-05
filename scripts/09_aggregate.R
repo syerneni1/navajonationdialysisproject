@@ -13,8 +13,12 @@ library(sf)
 library(leaflet)
 library(htmlwidgets)
 library(ggplot2)
+library(ggspatial)
+library(patchwork)
+library(tigris)
 
 sf_use_s2(FALSE)
+options(tigris_use_cache = TRUE)
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 BLOCKS_FILE <- "data_processed/block_access_scores.geojson"
@@ -41,7 +45,19 @@ if (file.exists(paste0(BLOCKS_FILE, ".gz")) && !file.exists(BLOCKS_FILE)) {
 }
 
 blocks <- st_read(BLOCKS_FILE, quiet = TRUE)
-cat("  Blocks:", nrow(blocks), "\n")
+cat("  Blocks (all):", nrow(blocks), "\n")
+
+# Load original filtered blocks to get in_navajo flag
+blocks_filtered <- st_read("data_processed/blocks_filtered.geojson", quiet = TRUE) %>%
+  st_drop_geometry() %>%
+  select(GEOID, in_navajo)
+
+# Join to get in_navajo flag and filter to ONLY blocks >50% in Navajo Nation
+blocks <- blocks %>%
+  left_join(blocks_filtered, by = "GEOID") %>%
+  filter(in_navajo == TRUE)
+
+cat("  Blocks filtered to >50% in Navajo Nation:", nrow(blocks), "\n")
 
 chapters <- st_read(CHAPTERS_FILE, quiet = TRUE)
 cat("  Chapters:", nrow(chapters), "\n")
@@ -60,32 +76,57 @@ blocks <- st_transform(blocks, st_crs(chapters))
 isochrones <- st_transform(isochrones, st_crs(chapters))
 
 # ── 2. Assign Blocks to Chapters ─────────────────────────────────────────────
-cat("Assigning blocks to chapters using majority area (>50%)...\n")
+CACHE_FILE <- "data_processed/block_chapter_assignments.csv"
 
-# Calculate what % of each block's area is in each chapter
-blocks$area_total <- st_area(blocks)
+# Check if cached assignment exists
+if (file.exists(CACHE_FILE)) {
+  cat("Loading cached chapter assignments...\n")
+  chapter_assignments <- read_csv(CACHE_FILE, show_col_types = FALSE)
 
-assign_to_chapter <- function(block_geom, chapters_sf) {
-  intersections <- suppressWarnings(st_intersection(block_geom, chapters_sf))
-  if (nrow(intersections) == 0) return(NA_character_)
-  intersections$area <- st_area(intersections)
-  # Find chapter with most area
-  intersections %>% arrange(desc(area)) %>% slice(1) %>% pull(NAME)
+  blocks <- blocks %>%
+    left_join(chapter_assignments, by = "GEOID")
+
+  cat("✓ Loaded cached assignments\n")
+} else {
+  cat("Assigning blocks to chapters using majority area (>50%)...\n")
+  cat("  (This is slow - will be cached for future runs)\n\n")
+
+  # Calculate what % of each block's area is in each chapter
+  blocks$area_total <- st_area(blocks)
+
+  assign_to_chapter <- function(block_geom, chapters_sf) {
+    intersections <- suppressWarnings(st_intersection(block_geom, chapters_sf))
+    if (nrow(intersections) == 0) return(NA_character_)
+    intersections$area <- st_area(intersections)
+    # Find chapter with most area
+    intersections %>% arrange(desc(area)) %>% slice(1) %>% pull(NAME)
+  }
+
+  cat("  Processing blocks (this may take a few minutes)...\n")
+  blocks$chapter <- sapply(1:nrow(blocks), function(i) {
+    if (i %% 5000 == 0) cat("    Block", i, "of", nrow(blocks), "\n")
+    assign_to_chapter(blocks[i, ], chapters %>% select(NAME))
+  })
+
+  # Save cache
+  cat("\n  Saving chapter assignments to cache...\n")
+  blocks %>%
+    st_drop_geometry() %>%
+    select(GEOID, chapter) %>%
+    write_csv(CACHE_FILE)
+  cat("  ✓ Cache saved\n")
 }
 
-cat("  Processing blocks (this may take a few minutes)...\n")
-blocks$chapter <- sapply(1:nrow(blocks), function(i) {
-  if (i %% 5000 == 0) cat("    Block", i, "of", nrow(blocks), "\n")
-  assign_to_chapter(blocks[i, ], chapters %>% select(NAME))
-})
-
 # Only keep blocks that were assigned to a chapter for aggregation
+# NOTE: The cache only contains blocks that are >50% in Navajo Nation (from Step 4)
+# Blocks outside chapters or in isochrones-only are excluded
 blocks_in_chapters <- blocks %>% filter(!is.na(chapter))
 blocks_outside <- blocks %>% filter(is.na(chapter))
 
 cat("\n✓ Chapter assignment complete\n")
-cat("  Blocks assigned to chapters:", nrow(blocks_in_chapters), "\n")
-cat("  Blocks outside chapters:", nrow(blocks_outside), "(excluded from aggregation)\n\n")
+cat("  Blocks assigned to chapters (>50% in Navajo):", nrow(blocks_in_chapters), "\n")
+cat("  Blocks excluded (outside chapters or isochrone-only):", nrow(blocks_outside), "\n")
+cat("  IMPORTANT: Only blocks >50% in Navajo Nation are included in aggregation\n\n")
 
 # ── 3. Aggregate to Chapter Level ────────────────────────────────────────────
 cat("Aggregating to chapter level (P_k-weighted)...\n")
@@ -275,179 +316,377 @@ cat("✓ HTML map saved to:", MAP_FILE, "\n\n")
 # ── 8. Produce R Plots (ggplot2) ─────────────────────────────────────────────
 cat("Creating publication-quality R plots with ggplot2...\n")
 
-# Define map extents
-# Four corners: extent of all isochrones
-bbox_4corners <- st_bbox(isochrones)
+# Load state boundaries
+cat("  Loading state boundaries...\n")
+states <- states(cb = TRUE, progress_bar = FALSE) %>%
+  filter(STUSPS %in% c("NM", "AZ", "UT", "CO")) %>%
+  st_transform(st_crs(chapters))
 
-# Navajo Nation: extent of F_d isochrones (same as 4corners in this case)
+# Define map extent
 bbox_navajo <- st_bbox(isochrones)
 
-# Theme for all plots
+# Unified theme for all plots
 theme_map <- function() {
-  theme_minimal(base_family = "Arial", base_size = 10) +
+  theme_void(base_family = "Arial", base_size = 11) +
     theme(
-      axis.text = element_blank(),
-      axis.title = element_blank(),
-      panel.grid = element_blank(),
       legend.position = "right",
-      plot.title = element_text(hjust = 0.5, face = "bold", size = 12),
-      plot.margin = margin(5, 5, 5, 5)
+      legend.justification = c(0, 1),
+      legend.title = element_text(size = 11, face = "bold"),
+      legend.text = element_text(size = 10),
+      legend.key.height = unit(1.0, "cm"),
+      legend.key.width = unit(0.5, "cm"),
+      plot.title = element_text(hjust = 0.5, face = "bold", size = 12, margin = margin(b = 10)),
+      plot.margin = margin(5, 5, 5, 5),
+      plot.tag = element_text(size = 12, face = "bold"),
+      plot.tag.position = c(0.5, 0.02)
     )
 }
 
-# Color palettes
-# For SPAR: diverging around 1.0
-spar_colors <- scale_fill_gradient2(
-  low = "#d73027",
-  mid = "#ffffbf",
-  high = "#1a9850",
-  midpoint = 1.0,
-  na.value = "grey90",
-  name = "SPAR"
+# Consistent border styling
+border_style <- list(
+  color = "grey40",
+  size = 0.2
 )
 
-# For P_k and SPAI: sequential
-demand_colors <- scale_fill_viridis_c(
-  option = "plasma",
-  na.value = "grey90",
-  name = "Demand (P_k)"
+cat("  Creating block-level maps...\n")
+
+# Block-level P_k (use all blocks with pop > 0)
+blocks_with_pop <- blocks_in_chapters %>% filter(block_pop > 0)
+
+# Calculate state label positions WITHIN the Navajo map extent
+# Use fixed positions that are visible on the map
+state_labels <- data.frame(
+  name = c("AZ", "NM", "UT", "CO"),
+  X = c(-111.5, -107.0, -110.5, -107.5),  # Longitudes within bbox
+  Y = c(35.0, 34.8, 37.8, 37.8)  # Latitudes within bbox, aligned
 )
 
-spai_colors <- scale_fill_viridis_c(
-  option = "viridis",
-  na.value = "grey90",
-  name = "SPAI"
+# Calculate demand per capita for blocks
+blocks_with_pop <- blocks_with_pop %>%
+  mutate(P_k_per_capita = P_k / block_pop)
+
+# Calculate demand per capita for chapters and agencies
+chapter_results <- chapter_results %>%
+  mutate(P_per_capita = P_total / population)
+
+agency_results <- agency_results %>%
+  mutate(P_per_capita = P_total / population)
+
+# Calculate unified scales for each metric across all three levels
+# Demand per capita scale
+demand_range <- c(
+  min(c(blocks_with_pop$P_k_per_capita, chapter_results$P_per_capita, agency_results$P_per_capita), na.rm = TRUE),
+  max(c(blocks_with_pop$P_k_per_capita, chapter_results$P_per_capita, agency_results$P_per_capita), na.rm = TRUE)
 )
 
-cat("  Creating demand choropleth (P_k)...\n")
+# SPAI scale (block and chapter only)
+spai_range <- c(
+  min(c(blocks_with_pop$A_k, chapter_results$SPAI_weighted), na.rm = TRUE),
+  max(c(blocks_with_pop$A_k, chapter_results$SPAI_weighted), na.rm = TRUE)
+)
 
-# P_k at chapter level
-p_demand_chapter <- ggplot() +
-  geom_sf(data = chapter_results, aes(fill = P_total), color = "white", size = 0.3) +
-  demand_colors +
+# SPAR scale
+spar_range <- c(
+  min(c(blocks_with_pop$SPAR_k, chapter_results$SPAR_weighted, agency_results$SPAR_weighted), na.rm = TRUE),
+  max(c(blocks_with_pop$SPAR_k, chapter_results$SPAR_weighted, agency_results$SPAR_weighted), na.rm = TRUE)
+)
+
+cat("  Unified scale ranges:\n")
+cat("    Demand per capita:", round(demand_range[1], 4), "to", round(demand_range[2], 4), "\n")
+cat("    SPAI:", formatC(spai_range[1], format="e", digits=2), "to", formatC(spai_range[2], format="e", digits=2), "\n")
+cat("    SPAR:", round(spar_range[1], 3), "to", round(spar_range[2], 3), "\n\n")
+
+# Unified color scales with MORE bins and discrete boxes
+demand_colors_unified <- scale_fill_stepsn(
+  colors = c("#ffffcc", "#ffeda0", "#fed976", "#feb24c", "#fd8d3c", "#fc4e2a", "#e31a1c", "#bd0026", "#800026"),
+  n.breaks = 10,
+  limits = demand_range,
+  na.value = "grey90",
+  name = "Demand\nper capita",
+  guide = guide_colorsteps(barheight = unit(5, "cm"), barwidth = unit(0.6, "cm"),
+                          show.limits = TRUE, ticks = TRUE)
+)
+
+spai_colors_unified <- scale_fill_stepsn(
+  colors = c("#f7fbff", "#deebf7", "#c6dbef", "#9ecae1", "#6baed6", "#4292c6", "#2171b5", "#08519c", "#08306b"),
+  n.breaks = 10,
+  limits = spai_range,
+  na.value = "grey90",
+  name = "SPAI",
+  guide = guide_colorsteps(barheight = unit(5, "cm"), barwidth = unit(0.6, "cm"),
+                          show.limits = TRUE, ticks = TRUE)
+)
+
+spar_colors_unified <- scale_fill_stepsn(
+  colors = c("#a50026", "#d73027", "#f46d43", "#fdae61", "#fee08b", "#ffffbf",
+             "#d9ef8b", "#a6d96a", "#66bd63", "#1a9850", "#006837"),
+  n.breaks = 12,
+  limits = spar_range,
+  na.value = "grey90",
+  name = "E2SFCA\nSPAR",
+  guide = guide_colorsteps(barheight = unit(6, "cm"), barwidth = unit(0.6, "cm"),
+                          show.limits = TRUE, ticks = TRUE)
+)
+
+p_demand_block <- ggplot() +
+  geom_sf(data = blocks_with_pop, aes(fill = P_k_per_capita), color = NA) +
+  geom_sf(data = chapters, fill = NA, color = border_style$color, size = border_style$size) +
+  demand_colors_unified +
   coord_sf(xlim = c(bbox_navajo["xmin"], bbox_navajo["xmax"]),
-           ylim = c(bbox_navajo["ymin"], bbox_navajo["ymax"])) +
-  labs(title = "Dialysis Demand by Chapter") +
+           ylim = c(bbox_navajo["ymin"], bbox_navajo["ymax"]), expand = FALSE) +
+  annotation_scale(location = "bl", width_hint = 0.18, text_family = "Arial", text_cex = 0.7,
+                  unit_category = "imperial", pad_x = unit(0.3, "cm"), pad_y = unit(0.3, "cm")) +
+  annotation_scale(location = "bl", width_hint = 0.18, text_family = "Arial", text_cex = 0.7,
+                  unit_category = "metric", pad_x = unit(0.3, "cm"), pad_y = unit(1.0, "cm")) +
+  annotation_north_arrow(location = "tr", which_north = "true",
+                        style = north_arrow_orienteering(text_family = "Arial", text_size = 10),
+                        height = unit(1.0, "cm"), width = unit(1.0, "cm"),
+                        pad_x = unit(0.3, "cm"), pad_y = unit(0.3, "cm")) +
   theme_map()
 
-ggsave("outputs_maps/09_demand_chapter.png", p_demand_chapter, width = 8, height = 6, dpi = 300)
-
-# P_k at agency level
-p_demand_agency <- ggplot() +
-  geom_sf(data = agency_results, aes(fill = P_total), color = "black", size = 0.5) +
-  demand_colors +
+# Block-level SPAI
+p_spai_block <- ggplot() +
+  geom_sf(data = blocks_with_pop, aes(fill = A_k), color = NA) +
+  geom_sf(data = chapters, fill = NA, color = border_style$color, size = border_style$size) +
+  spai_colors_unified +
   coord_sf(xlim = c(bbox_navajo["xmin"], bbox_navajo["xmax"]),
-           ylim = c(bbox_navajo["ymin"], bbox_navajo["ymax"])) +
-  labs(title = "Dialysis Demand by Agency") +
+           ylim = c(bbox_navajo["ymin"], bbox_navajo["ymax"]), expand = FALSE) +
+  annotation_scale(location = "bl", width_hint = 0.18, text_family = "Arial", text_cex = 0.7,
+                  unit_category = "imperial", pad_x = unit(0.3, "cm"), pad_y = unit(0.3, "cm")) +
+  annotation_scale(location = "bl", width_hint = 0.18, text_family = "Arial", text_cex = 0.7,
+                  unit_category = "metric", pad_x = unit(0.3, "cm"), pad_y = unit(1.0, "cm")) +
+  annotation_north_arrow(location = "tr", which_north = "true",
+                        style = north_arrow_orienteering(text_family = "Arial", text_size = 10),
+                        height = unit(1.0, "cm"), width = unit(1.0, "cm"),
+                        pad_x = unit(0.3, "cm"), pad_y = unit(0.3, "cm")) +
   theme_map()
 
-ggsave("outputs_maps/09_demand_agency.png", p_demand_agency, width = 8, height = 6, dpi = 300)
-
-cat("  Creating SPAI choropleth...\n")
-
-# SPAI at chapter level
-p_spai_chapter <- ggplot() +
-  geom_sf(data = chapter_results, aes(fill = SPAI_weighted), color = "white", size = 0.3) +
-  spai_colors +
-  coord_sf(xlim = c(bbox_navajo["xmin"], bbox_navajo["xmax"]),
-           ylim = c(bbox_navajo["ymin"], bbox_navajo["ymax"])) +
-  labs(title = "SPAI by Chapter") +
-  theme_map()
-
-ggsave("outputs_maps/09_spai_chapter.png", p_spai_chapter, width = 8, height = 6, dpi = 300)
-
-# SPAI at agency level
-p_spai_agency <- ggplot() +
-  geom_sf(data = agency_results, aes(fill = SPAI_weighted), color = "black", size = 0.5) +
-  spai_colors +
-  coord_sf(xlim = c(bbox_navajo["xmin"], bbox_navajo["xmax"]),
-           ylim = c(bbox_navajo["ymin"], bbox_navajo["ymax"])) +
-  labs(title = "SPAI by Agency") +
-  theme_map()
-
-ggsave("outputs_maps/09_spai_agency.png", p_spai_agency, width = 8, height = 6, dpi = 300)
-
-cat("  Creating SPAR choropleth...\n")
-
-# SPAR at chapter level
-p_spar_chapter <- ggplot() +
-  geom_sf(data = chapter_results, aes(fill = SPAR_weighted), color = "white", size = 0.3) +
-  spar_colors +
-  coord_sf(xlim = c(bbox_navajo["xmin"], bbox_navajo["xmax"]),
-           ylim = c(bbox_navajo["ymin"], bbox_navajo["ymax"])) +
-  labs(title = "SPAR by Chapter") +
-  theme_map()
-
-ggsave("outputs_maps/09_spar_chapter.png", p_spar_chapter, width = 8, height = 6, dpi = 300)
-
-# SPAR at agency level
-p_spar_agency <- ggplot() +
-  geom_sf(data = agency_results, aes(fill = SPAR_weighted), color = "black", size = 0.5) +
-  spar_colors +
-  coord_sf(xlim = c(bbox_navajo["xmin"], bbox_navajo["xmax"]),
-           ylim = c(bbox_navajo["ymin"], bbox_navajo["ymax"])) +
-  labs(title = "SPAR by Agency") +
-  theme_map()
-
-ggsave("outputs_maps/09_spar_agency.png", p_spar_agency, width = 8, height = 6, dpi = 300)
-
-cat("  Creating side-by-side comparison panels...\n")
-
-# Side-by-side: Block, Chapter, Agency for SPAR
-# For block level, sample or aggregate to make it manageable
-blocks_sample <- blocks_in_chapters %>%
-  filter(block_pop > 0) %>%
-  sample_n(min(5000, n()))
-
+# Block-level SPAR
 p_spar_block <- ggplot() +
-  geom_sf(data = blocks_sample, aes(fill = SPAR_k), color = NA) +
-  spar_colors +
+  geom_sf(data = blocks_with_pop, aes(fill = SPAR_k), color = NA) +
+  geom_sf(data = chapters, fill = NA, color = border_style$color, size = border_style$size) +
+  spar_colors_unified +
   coord_sf(xlim = c(bbox_navajo["xmin"], bbox_navajo["xmax"]),
-           ylim = c(bbox_navajo["ymin"], bbox_navajo["ymax"])) +
-  labs(title = "Block Level") +
+           ylim = c(bbox_navajo["ymin"], bbox_navajo["ymax"]), expand = FALSE) +
+  annotation_scale(location = "bl", width_hint = 0.18, text_family = "Arial", text_cex = 0.7,
+                  unit_category = "imperial", pad_x = unit(0.3, "cm"), pad_y = unit(0.3, "cm")) +
+  annotation_scale(location = "bl", width_hint = 0.18, text_family = "Arial", text_cex = 0.7,
+                  unit_category = "metric", pad_x = unit(0.3, "cm"), pad_y = unit(1.0, "cm")) +
+  annotation_north_arrow(location = "tr", which_north = "true",
+                        style = north_arrow_orienteering(text_family = "Arial", text_size = 10),
+                        height = unit(1.0, "cm"), width = unit(1.0, "cm"),
+                        pad_x = unit(0.3, "cm"), pad_y = unit(0.3, "cm")) +
   theme_map()
 
-# Comparison plot requires patchwork package - skipping for now
-# p_spar_comparison <- p_spar_block + p_spar_chapter + p_spar_agency +
-#   plot_layout(ncol = 3) +
-#   plot_annotation(title = "SPAR Comparison: Block, Chapter, Agency")
-#
-# ggsave("outputs_maps/09_spar_comparison.png", p_spar_comparison, width = 18, height = 6, dpi = 300)
+cat("  Creating chapter-level maps...\n")
 
-# Save individual block plot instead
-ggsave("outputs_maps/09_spar_block.png", p_spar_block, width = 8, height = 6, dpi = 300)
+# Chapter-level P_k per capita
+p_demand_chapter <- ggplot() +
+  geom_sf(data = chapter_results, aes(fill = P_per_capita), color = border_style$color, size = border_style$size) +
+  demand_colors_unified +
+  coord_sf(xlim = c(bbox_navajo["xmin"], bbox_navajo["xmax"]),
+           ylim = c(bbox_navajo["ymin"], bbox_navajo["ymax"]), expand = FALSE) +
+  annotation_scale(location = "bl", width_hint = 0.18, text_family = "Arial", text_cex = 0.7,
+                  unit_category = "imperial", pad_x = unit(0.3, "cm"), pad_y = unit(0.3, "cm")) +
+  annotation_scale(location = "bl", width_hint = 0.18, text_family = "Arial", text_cex = 0.7,
+                  unit_category = "metric", pad_x = unit(0.3, "cm"), pad_y = unit(1.0, "cm")) +
+  annotation_north_arrow(location = "tr", which_north = "true",
+                        style = north_arrow_orienteering(text_family = "Arial", text_size = 10),
+                        height = unit(1.0, "cm"), width = unit(1.0, "cm"),
+                        pad_x = unit(0.3, "cm"), pad_y = unit(0.3, "cm")) +
+  theme_map()
+
+# Chapter-level SPAI
+p_spai_chapter <- ggplot() +
+  geom_sf(data = chapter_results, aes(fill = SPAI_weighted), color = border_style$color, size = border_style$size) +
+  spai_colors_unified +
+  coord_sf(xlim = c(bbox_navajo["xmin"], bbox_navajo["xmax"]),
+           ylim = c(bbox_navajo["ymin"], bbox_navajo["ymax"]), expand = FALSE) +
+  annotation_scale(location = "bl", width_hint = 0.18, text_family = "Arial", text_cex = 0.7,
+                  unit_category = "imperial", pad_x = unit(0.3, "cm"), pad_y = unit(0.3, "cm")) +
+  annotation_scale(location = "bl", width_hint = 0.18, text_family = "Arial", text_cex = 0.7,
+                  unit_category = "metric", pad_x = unit(0.3, "cm"), pad_y = unit(1.0, "cm")) +
+  annotation_north_arrow(location = "tr", which_north = "true",
+                        style = north_arrow_orienteering(text_family = "Arial", text_size = 10),
+                        height = unit(1.0, "cm"), width = unit(1.0, "cm"),
+                        pad_x = unit(0.3, "cm"), pad_y = unit(0.3, "cm")) +
+  theme_map()
+
+# Chapter-level SPAR
+p_spar_chapter <- ggplot() +
+  geom_sf(data = chapter_results, aes(fill = SPAR_weighted), color = border_style$color, size = border_style$size) +
+  spar_colors_unified +
+  coord_sf(xlim = c(bbox_navajo["xmin"], bbox_navajo["xmax"]),
+           ylim = c(bbox_navajo["ymin"], bbox_navajo["ymax"]), expand = FALSE) +
+  annotation_scale(location = "bl", width_hint = 0.18, text_family = "Arial", text_cex = 0.7,
+                  unit_category = "imperial", pad_x = unit(0.3, "cm"), pad_y = unit(0.3, "cm")) +
+  annotation_scale(location = "bl", width_hint = 0.18, text_family = "Arial", text_cex = 0.7,
+                  unit_category = "metric", pad_x = unit(0.3, "cm"), pad_y = unit(1.0, "cm")) +
+  annotation_north_arrow(location = "tr", which_north = "true",
+                        style = north_arrow_orienteering(text_family = "Arial", text_size = 10),
+                        height = unit(1.0, "cm"), width = unit(1.0, "cm"),
+                        pad_x = unit(0.3, "cm"), pad_y = unit(0.3, "cm")) +
+  theme_map()
+
+cat("  Creating agency-level maps...\n")
+
+# Agency-level P_k per capita
+p_demand_agency <- ggplot() +
+  geom_sf(data = agency_results, aes(fill = P_per_capita), color = border_style$color, size = border_style$size) +
+  demand_colors_unified +
+  coord_sf(xlim = c(bbox_navajo["xmin"], bbox_navajo["xmax"]),
+           ylim = c(bbox_navajo["ymin"], bbox_navajo["ymax"]), expand = FALSE) +
+  annotation_scale(location = "bl", width_hint = 0.18, text_family = "Arial", text_cex = 0.7,
+                  unit_category = "imperial", pad_x = unit(0.3, "cm"), pad_y = unit(0.3, "cm")) +
+  annotation_scale(location = "bl", width_hint = 0.18, text_family = "Arial", text_cex = 0.7,
+                  unit_category = "metric", pad_x = unit(0.3, "cm"), pad_y = unit(1.0, "cm")) +
+  annotation_north_arrow(location = "tr", which_north = "true",
+                        style = north_arrow_orienteering(text_family = "Arial", text_size = 10),
+                        height = unit(1.0, "cm"), width = unit(1.0, "cm"),
+                        pad_x = unit(0.3, "cm"), pad_y = unit(0.3, "cm")) +
+  theme_map()
+
+# Agency-level SPAR
+p_spar_agency <- ggplot() +
+  geom_sf(data = agency_results, aes(fill = SPAR_weighted), color = border_style$color, size = border_style$size) +
+  spar_colors_unified +
+  coord_sf(xlim = c(bbox_navajo["xmin"], bbox_navajo["xmax"]),
+           ylim = c(bbox_navajo["ymin"], bbox_navajo["ymax"]), expand = FALSE) +
+  annotation_scale(location = "bl", width_hint = 0.18, text_family = "Arial", text_cex = 0.7,
+                  unit_category = "imperial", pad_x = unit(0.3, "cm"), pad_y = unit(0.3, "cm")) +
+  annotation_scale(location = "bl", width_hint = 0.18, text_family = "Arial", text_cex = 0.7,
+                  unit_category = "metric", pad_x = unit(0.3, "cm"), pad_y = unit(1.0, "cm")) +
+  annotation_north_arrow(location = "tr", which_north = "true",
+                        style = north_arrow_orienteering(text_family = "Arial", text_size = 10),
+                        height = unit(1.0, "cm"), width = unit(1.0, "cm"),
+                        pad_x = unit(0.3, "cm"), pad_y = unit(0.3, "cm")) +
+  theme_map()
+
+cat("  Creating combined panels...\n")
+
+# 1x3 Demand panel (block, chapter, agency)
+p_demand_combined <- (p_demand_block | p_demand_chapter | p_demand_agency) +
+  plot_layout(guides = "collect") +
+  plot_annotation(
+    title = "Dialysis Demand per Capita",
+    tag_levels = 'a',
+    theme = theme(
+      plot.title = element_text(hjust = 0.5, face = "bold", size = 14, margin = margin(b = 5, t = 5)),
+      plot.tag = element_text(size = 12, face = "bold"),
+      plot.tag.position = "bottom",
+      plot.margin = margin(0, 0, 0, 0)
+    )
+  )
+
+ggsave("outputs_maps/09_demand_combined.png", p_demand_combined, width = 24, height = 9, dpi = 300, bg = "white")
+
+# 1x2 SPAI panel (block, chapter only - no agency)
+p_spai_combined <- (p_spai_block | p_spai_chapter) +
+  plot_layout(guides = "collect") +
+  plot_annotation(
+    title = "Spatial Access Index (SPAI)",
+    tag_levels = 'a',
+    theme = theme(
+      plot.title = element_text(hjust = 0.5, face = "bold", size = 14, margin = margin(b = 5, t = 5)),
+      plot.tag = element_text(size = 12, face = "bold"),
+      plot.tag.position = "bottom",
+      plot.margin = margin(0, 0, 0, 0)
+    )
+  )
+
+ggsave("outputs_maps/09_spai_combined.png", p_spai_combined, width = 18, height = 9, dpi = 300, bg = "white")
+
+# 1x3 SPAR panel (block, chapter, agency)
+p_spar_combined <- (p_spar_block | p_spar_chapter | p_spar_agency) +
+  plot_layout(guides = "collect") +
+  plot_annotation(
+    title = "Spatial Access Ratio (SPAR)",
+    tag_levels = 'a',
+    theme = theme(
+      plot.title = element_text(hjust = 0.5, face = "bold", size = 14, margin = margin(b = 5, t = 5)),
+      plot.tag = element_text(size = 12, face = "bold"),
+      plot.tag.position = "bottom",
+      plot.margin = margin(0, 0, 0, 0)
+    )
+  )
+
+ggsave("outputs_maps/09_spar_combined.png", p_spar_combined, width = 24, height = 9, dpi = 300, bg = "white")
 
 cat("  Creating facility catchment maps...\n")
 
-# Isochrone map
-isochrone_colors <- c("0-15 min" = "#1a9850", "15-30 min" = "#fdae61", "30-60 min" = "#d73027")
+# Calculate state label positions (centroids, adjusted to not overlap Navajo)
+state_labels <- states %>%
+  st_centroid() %>%
+  st_coordinates() %>%
+  as.data.frame() %>%
+  mutate(name = states$NAME)
+
+# Adjust label positions to align horizontally when possible
+state_labels$Y[state_labels$name == "Arizona"] <- state_labels$Y[state_labels$name == "Arizona"] - 0.5
+state_labels$Y[state_labels$name == "New Mexico"] <- state_labels$Y[state_labels$name == "Arizona"]  # Align with AZ
+state_labels$Y[state_labels$name == "Utah"] <- state_labels$Y[state_labels$name == "Utah"] + 0.3
+state_labels$Y[state_labels$name == "Colorado"] <- state_labels$Y[state_labels$name == "Utah"]  # Align with UT
+
+# Isochrone map with F_d subscript
+isochrone_colors_palette <- c("0-15 min" = "#1a9850", "15-30 min" = "#fdae61", "30-60 min" = "#d73027")
 
 p_isochrones <- ggplot() +
-  geom_sf(data = isochrones, aes(fill = band), alpha = 0.5, color = NA) +
-  scale_fill_manual(values = isochrone_colors, name = "Travel Time") +
-  geom_sf(data = chapters, fill = NA, color = "grey50", size = 0.3) +
-  coord_sf(xlim = c(bbox_4corners["xmin"], bbox_4corners["xmax"]),
-           ylim = c(bbox_4corners["ymin"], bbox_4corners["ymax"])) +
-  labs(title = "F_d Facility Isochrones") +
-  theme_map()
+  geom_sf(data = states, fill = NA, color = "grey60", size = 0.5) +
+  geom_sf(data = isochrones, aes(fill = band), alpha = 0.6, color = NA) +
+  scale_fill_manual(values = isochrone_colors_palette, name = "Travel Time",
+                   guide = guide_legend(keyheight = unit(0.8, "cm"), keywidth = unit(0.5, "cm"))) +
+  geom_sf(data = chapters, fill = NA, color = border_style$color, size = border_style$size) +
+  coord_sf(xlim = c(bbox_navajo["xmin"], bbox_navajo["xmax"]),
+           ylim = c(bbox_navajo["ymin"], bbox_navajo["ymax"]), expand = FALSE) +
+  annotation_scale(location = "bl", width_hint = 0.18, text_family = "Arial", text_cex = 0.8,
+                  unit_category = "imperial", pad_x = unit(0.3, "cm"), pad_y = unit(0.3, "cm")) +
+  annotation_scale(location = "bl", width_hint = 0.18, text_family = "Arial", text_cex = 0.8,
+                  unit_category = "metric", pad_x = unit(0.3, "cm"), pad_y = unit(1.0, "cm")) +
+  annotation_north_arrow(location = "tr", which_north = "true",
+                        style = north_arrow_orienteering(text_family = "Arial", text_size = 10),
+                        height = unit(1.0, "cm"), width = unit(1.0, "cm"),
+                        pad_x = unit(0.3, "cm"), pad_y = unit(0.3, "cm")) +
+  labs(title = expression(F[d]~"Facility Isochrones")) +
+  theme_map() +
+  annotate("text", x = -111.5, y = 35.0, label = "AZ", size = 6, fontface = "bold") +
+  annotate("text", x = -107.0, y = 34.8, label = "NM", size = 6, fontface = "bold") +
+  annotate("text", x = -110.5, y = 37.8, label = "UT", size = 6, fontface = "bold") +
+  annotate("text", x = -107.5, y = 37.8, label = "CO", size = 6, fontface = "bold")
 
-ggsave("outputs_maps/09_isochrones.png", p_isochrones, width = 10, height = 8, dpi = 300)
+ggsave("outputs_maps/09_isochrones.png", p_isochrones, width = 10, height = 8, dpi = 300, bg = "white")
 
-# Facility bubble map (R_j)
+# Facility bubble map with R_j subscript
 facilities_sf <- st_as_sf(facilities, coords = c("longitude", "latitude"), crs = 4326) %>%
   st_transform(st_crs(chapters))
 
 p_facilities <- ggplot() +
-  geom_sf(data = chapters, fill = "grey95", color = "grey70", size = 0.3) +
-  geom_sf(data = facilities_sf, aes(size = dialysis_station_count, color = R_j), alpha = 0.7) +
-  scale_size_continuous(range = c(2, 15), name = "Stations") +
-  scale_color_gradient(low = "#ffffbf", high = "#d73027", name = "R_j") +
+  geom_sf(data = states, fill = NA, color = "grey60", size = 0.5) +
+  geom_sf(data = chapters, fill = "grey95", color = border_style$color, size = border_style$size) +
+  geom_sf(data = facilities_sf, aes(size = dialysis_station_count, color = R_j * 10000), alpha = 0.7) +
+  scale_size_continuous(range = c(2, 12), name = "Stations\n(Supply)",
+                       guide = guide_legend(override.aes = list(alpha = 1))) +
+  scale_color_stepsn(colors = c("#d73027", "#fc8d59", "#fee08b", "#ffffbf"),
+                    n.breaks = 5,
+                    name = expression(R[j]~"(×10"^4*")"),
+                    guide = guide_colorsteps(barheight = unit(3, "cm"), barwidth = unit(0.5, "cm"))) +
   coord_sf(xlim = c(bbox_navajo["xmin"], bbox_navajo["xmax"]),
-           ylim = c(bbox_navajo["ymin"], bbox_navajo["ymax"])) +
-  labs(title = "Dialysis Facilities (Size = Stations, Color = Supply Ratio)") +
-  theme_map()
+           ylim = c(bbox_navajo["ymin"], bbox_navajo["ymax"]), expand = FALSE) +
+  annotation_scale(location = "bl", width_hint = 0.18, text_family = "Arial", text_cex = 0.8,
+                  unit_category = "imperial", pad_x = unit(0.3, "cm"), pad_y = unit(0.3, "cm")) +
+  annotation_scale(location = "bl", width_hint = 0.18, text_family = "Arial", text_cex = 0.8,
+                  unit_category = "metric", pad_x = unit(0.3, "cm"), pad_y = unit(1.0, "cm")) +
+  annotation_north_arrow(location = "tr", which_north = "true",
+                        style = north_arrow_orienteering(text_family = "Arial", text_size = 10),
+                        height = unit(1.0, "cm"), width = unit(1.0, "cm"),
+                        pad_x = unit(0.3, "cm"), pad_y = unit(0.3, "cm")) +
+  labs(title = "Dialysis Facilities") +
+  theme_map() +
+  annotate("text", x = -111.5, y = 35.0, label = "AZ", size = 6, fontface = "bold") +
+  annotate("text", x = -107.0, y = 34.8, label = "NM", size = 6, fontface = "bold") +
+  annotate("text", x = -110.5, y = 37.8, label = "UT", size = 6, fontface = "bold") +
+  annotate("text", x = -107.5, y = 37.8, label = "CO", size = 6, fontface = "bold")
 
-ggsave("outputs_maps/09_facilities_bubble.png", p_facilities, width = 10, height = 8, dpi = 300)
+ggsave("outputs_maps/09_facilities_bubble.png", p_facilities, width = 10, height = 8, dpi = 300, bg = "white")
 
 cat("\n✓ All R plots saved to outputs_maps/\n\n")
 
@@ -476,13 +715,9 @@ cat("   ", OUTPUT_ACCESS_TIERS, "\n")
 cat("  HTML Map:\n")
 cat("   ", MAP_FILE, "\n")
 cat("  R Plots (PNG):\n")
-cat("    outputs_maps/09_demand_chapter.png\n")
-cat("    outputs_maps/09_demand_agency.png\n")
-cat("    outputs_maps/09_spai_chapter.png\n")
-cat("    outputs_maps/09_spai_agency.png\n")
-cat("    outputs_maps/09_spar_chapter.png\n")
-cat("    outputs_maps/09_spar_agency.png\n")
-cat("    outputs_maps/09_spar_comparison.png (3-panel)\n")
+cat("    outputs_maps/09_demand_combined.png (1x3 panel: block, chapter, agency)\n")
+cat("    outputs_maps/09_spai_combined.png (1x2 panel: block, chapter)\n")
+cat("    outputs_maps/09_spar_combined.png (1x3 panel: block, chapter, agency)\n")
 cat("    outputs_maps/09_isochrones.png\n")
 cat("    outputs_maps/09_facilities_bubble.png\n")
 cat("───────────────────────────────────────────────────────────────────────\n")

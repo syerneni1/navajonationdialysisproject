@@ -70,6 +70,14 @@ blocks_navajo$chapter <- sapply(1:nrow(blocks_navajo), function(i) {
 
 cat("  Assigned", sum(!is.na(blocks_navajo$chapter)), "blocks to chapters\n\n")
 
+# Save chapter assignments for use in Step 9
+cat("  Saving chapter assignments to cache...\n")
+blocks_navajo %>%
+  st_drop_geometry() %>%
+  select(GEOID, chapter) %>%
+  write.csv("data_processed/block_chapter_assignments.csv", row.names = FALSE)
+cat("  ✓ Saved to data_processed/block_chapter_assignments.csv\n\n")
+
 cat("Creating map...\n")
 
 # Create color palette for chapters
