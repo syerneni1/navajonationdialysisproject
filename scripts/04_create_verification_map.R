@@ -122,7 +122,7 @@ map <- map %>%
     fillOpacity = 0.3,
     color = "darkgreen",
     weight = 1,
-    group = "Isochrones (0-15 min)",
+    group = "Isochrones",
     label = ~paste0("Facility ", facility_id, " - 0-15 min")
   ) %>%
   addPolygons(
@@ -131,7 +131,7 @@ map <- map %>%
     fillOpacity = 0.3,
     color = "gold",
     weight = 1,
-    group = "Isochrones (15-30 min)",
+    group = "Isochrones",
     label = ~paste0("Facility ", facility_id, " - 15-30 min")
   ) %>%
   addPolygons(
@@ -140,7 +140,7 @@ map <- map %>%
     fillOpacity = 0.3,
     color = "darkred",
     weight = 1,
-    group = "Isochrones (30-60 min)",
+    group = "Isochrones",
     label = ~paste0("Facility ", facility_id, " - 30-60 min")
   )
 
@@ -208,9 +208,7 @@ map <- map %>%
 map <- map %>%
   addLayersControl(
     overlayGroups = c("Chapters",
-                      "Isochrones (0-15 min)",
-                      "Isochrones (15-30 min)",
-                      "Isochrones (30-60 min)",
+                      "Isochrones",
                       "Census Blocks (Navajo)",
                       "Census Blocks (Isochrones only)",
                       "F_d Facilities"),
