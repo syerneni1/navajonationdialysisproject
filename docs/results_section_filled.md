@@ -87,47 +87,50 @@ Of the total risk-weighted Navajo Nation population, 50.8% resided in blocks wit
 
 ## Correlation Analysis (Spearman's ρ, Chapter-Level)
 
+**Note:** Analysis includes 109 chapters with population ≥ 100; 2 very small chapters excluded (San Juan Southern Paiute areas, combined pop = 40).
+
 | Relationship | ρ | p-value | Interpretation |
 |-------------|---|---------|----------------|
-| Demand per Capita ↔ SPAR | -0.48 | <0.001 | **Negative**: Higher disease burden = worse access |
+| Demand per Capita ↔ SPAR | -0.46 | <0.001 | **Negative**: Higher disease burden = worse access |
 | Population ↔ SPAR | 0.37 | <0.001 | **Positive**: Larger chapters = better access |
 | Absolute Demand ↔ SPAR | 0.31 | <0.001 | **Weak positive**: More patients = slightly better access |
 | SPAI ↔ SPAR | 1.00 | <0.001 | **Perfect**: Both measure E2SFCA accessibility |
 
-**Key Finding:** The moderate negative correlation (ρ = -0.48) between demand per capita and SPAR indicates spatial health inequity—chapters with higher dialysis disease burden systematically experience worse geographic access to care.
+**Key Finding:** The moderate negative correlation (ρ = -0.46) between demand per capita and SPAR indicates spatial health inequity—chapters with higher dialysis disease burden systematically experience worse geographic access to care.
 
 ---
 
 ## Intervention Priority Rankings
 
+**Analysis includes 109 chapters with population ≥ 100** (excludes 2 very small SJSP chapters, total pop = 40).
+
 **Top 10 Priority Chapters** (by composite score: Access 50%, Demand 30%, Burden 20%):
 
-1. Greasewood Chapter (SPAR: 0.03, Pop: 1,079)
-2. Indian Wells Chapter (SPAR: 0.03, Pop: 935)
-3. Piñon Chapter (SPAR: 0.03, Pop: 2,724)
-4. Wide Ruins Chapter (SPAR: 0.04, Pop: 828)
-5. San Juan Southern Paiute North (SPAR: 0.00, Pop: 27) — **ZERO ACCESS**
-6. Forest Lake Chapter (SPAR: 0.11, Pop: 520)
-7. Red Valley Chapter (SPAR: 0.27, Pop: 1,157)
-8. Sanostee Chapter (SPAR: 0.31, Pop: 1,518)
-9. Navajo Mountain Chapter (SPAR: 0.00, Pop: 679) — **ZERO ACCESS**
-10. Two Grey Hills Chapter (SPAR: 0.22, Pop: 1,096)
+1. Greasewood Chapter (SPAR: 0.03, Pop: 1,079, Demand: 33,665)
+2. Indian Wells Chapter (SPAR: 0.03, Pop: 935, Demand: 27,223)
+3. Piñon Chapter (SPAR: 0.03, Pop: 2,724, Demand: 59,508)
+4. Wide Ruins Chapter (SPAR: 0.04, Pop: 828, Demand: 23,325)
+5. Forest Lake Chapter (SPAR: 0.11, Pop: 520, Demand: 15,070)
+6. Red Valley Chapter (SPAR: 0.27, Pop: 1,157, Demand: 32,186)
+7. Sanostee Chapter (SPAR: 0.31, Pop: 1,518, Demand: 38,486)
+8. Navajo Mountain Chapter (SPAR: 0.00, Pop: 679, Demand: 16,543) — **ZERO ACCESS**
+9. Two Grey Hills Chapter (SPAR: 0.22, Pop: 1,096, Demand: 28,110)
+10. White Cone Chapter (SPAR: 0.36, Pop: 1,211, Demand: 32,321)
 
-**Five chapters have complete absence of modeled access (SPAR = 0.00):**
-- San Juan Southern Paiute North
-- Navajo Mountain Chapter
-- Black Mesa Chapter
-- Alamo Chapter
-- LeChee Chapter
+**Four chapters have complete absence of modeled access (SPAR = 0.00):**
+- Navajo Mountain Chapter (Rank #8)
+- Black Mesa Chapter (Rank #12)
+- Alamo Chapter (Rank #14)
+- LeChee Chapter (Rank #17)
 
 **Priority Tier Summary:**
 
-| Tier | Chapters | Population | Mean SPAR |
-|------|----------|------------|-----------|
-| Tier 1 (Highest Priority) | 28 | 26,031 | 0.20 |
-| Tier 2 (High Priority) | 28 | 48,926 | 0.73 |
-| Tier 3 (Moderate Priority) | 27 | 33,828 | 1.10 |
-| Tier 4 (Lower Priority) | 28 | 55,859 | 1.79 |
+| Tier | Chapters | Population | Total Demand | Mean SPAR |
+|------|----------|------------|--------------|-----------|
+| Tier 1 (Highest Priority) | 25 | 25,509 | 636,537 | 0.21 |
+| Tier 2 (High Priority) | 24 | 47,734 | 995,713 | 0.81 |
+| Tier 3 (Moderate Priority) | 24 | 31,014 | 646,290 | 1.06 |
+| Tier 4 (Lower Priority) | 25 | 56,685 | 1,066,346 | 1.86 |
 
 ---
 

@@ -30,6 +30,14 @@ cat("  Variables: NAME, P_total, SPAR_weighted, SPAI_weighted, population\n\n")
 chapters <- chapters %>%
   mutate(P_per_capita = P_total / population)
 
+# Filter to chapters with population >= 100
+cat("Filtering to chapters with population >= 100...\n")
+chapters_excluded <- chapters %>% filter(population < 100)
+chapters <- chapters %>% filter(population >= 100)
+
+cat("  Excluded", nrow(chapters_excluded), "chapters with very small population\n")
+cat("  Analyzing", nrow(chapters), "chapters\n\n")
+
 # ── 2. Spearman's Correlation Analysis ───────────────────────────────────────
 cat("Computing Spearman's rank correlations...\n\n")
 
